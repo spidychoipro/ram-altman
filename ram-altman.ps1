@@ -9,6 +9,7 @@
 # Usage:
 #   .\ram-altman.ps1                 Log a sample and send the daily email if due
 #   .\ram-altman.ps1 --status        Print current memory figures and exit
+#   .\ram-altman.ps1 --report        Status, commit charge, uptime and top processes
 #   .\ram-altman.ps1 --dry-run       Print the email that would be sent and exit
 #   .\ram-altman.ps1 --install-task  Sample every 5 minutes in Task Scheduler
 #   .\ram-altman.ps1 --uninstall-task Remove that scheduled task
@@ -28,7 +29,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:AppName = 'ram-altman'
-$script:Version = '1.1.0'
+$script:Version = '1.2.0'
 $script:TaskName = 'Ram Altman'
 $script:ScriptPath = $PSCommandPath
 $script:StateDir = $null
@@ -247,6 +248,112 @@ function Show-RamAltmanStatus {
     Write-Output "  Cache:    $(Format-Gib $Memory.CacheKb)"
 }
 
+function Format-Mib {
+    param([int64]$Kb)
+    $mib = [math]::Round($Kb / 1024.0, 1)
+    $mib.ToString('0.0', [Globalization.CultureInfo]::InvariantCulture) + ' MiB'
+}
+
+function Format-Duration {
+    param($Span)
+    if ($null -eq $Span -or $Span.TotalSeconds -lt 0) { return 'unknown' }
+    if ($Span.Days -gt 0) {
+        return ('{0}d {1}h {2}m' -f $Span.Days, $Span.Hours, $Span.Minutes)
+    }
+    if ($Span.Hours -gt 0) { return ('{0}h {1}m' -f $Span.Hours, $Span.Minutes) }
+    return ('{0}m' -f $Span.Minutes)
+}
+
+function Get-RamAltmanReportData {
+    $data = [pscustomobject]@{
+        Machine      = $env:COMPUTERNAME
+        CommitUsedKb = [int64]-1
+        CommitLimitKb = [int64]-1
+        Uptime       = $null
+        Processes    = @()
+    }
+
+    try {
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+        if ($os.CSName) { $data.Machine = $os.CSName }
+        if ($null -ne $os.TotalVirtualMemorySize -and $null -ne $os.FreeVirtualMemory) {
+            $data.CommitLimitKb = [int64]$os.TotalVirtualMemorySize
+            $data.CommitUsedKb = [int64]$os.TotalVirtualMemorySize - [int64]$os.FreeVirtualMemory
+        }
+        if ($null -ne $os.LastBootUpTime) {
+            $data.Uptime = (Get-Date) - $os.LastBootUpTime
+        }
+    }
+    catch {
+        # A report without commit or uptime is still a report.
+    }
+
+    try {
+        $data.Processes = @(
+            Get-Process -ErrorAction SilentlyContinue |
+                Sort-Object -Property WorkingSet64 -Descending |
+                Select-Object -First 5 |
+                ForEach-Object {
+                    [pscustomobject]@{
+                        Name         = $_.ProcessName
+                        WorkingSetKb = [int64]($_.WorkingSet64 / 1024)
+                    }
+                }
+        )
+    }
+    catch {
+        $data.Processes = @()
+    }
+
+    return $data
+}
+
+function Show-RamAltmanReport {
+    param($Config, $Memory, $Extra)
+
+    Write-Output 'Ram Altman - Windows Division'
+    Write-Output "Machine:    $($Extra.Machine)"
+    Write-Output "Total:      $(Format-Gib $Memory.TotalKb)"
+    Write-Output "Used:       $(Format-Gib $Memory.UsedKb)"
+    Write-Output "Available:  $(Format-Gib $Memory.AvailableKb) ($(Format-Percent $Memory.Percent)%)"
+    Write-Output "  Free:     $(Format-Gib $Memory.FreeKb)"
+    Write-Output "  Cache:    $(Format-Gib $Memory.CacheKb)"
+
+    if ($Extra.CommitLimitKb -gt 0) {
+        Write-Output "Commit:     $(Format-Gib $Extra.CommitUsedKb) / $(Format-Gib $Extra.CommitLimitKb)"
+    }
+    else {
+        Write-Output 'Commit:     unavailable'
+    }
+    Write-Output "Uptime:     $(Format-Duration $Extra.Uptime)"
+    Write-Output ''
+    Write-Output 'Top processes by working set:'
+
+    if ($Extra.Processes.Count -eq 0) {
+        Write-Output '  (none found)'
+    }
+    else {
+        foreach ($process in $Extra.Processes) {
+            Write-Output ('  {0,-24} {1,10}' -f $process.Name, (Format-Mib $process.WorkingSetKb))
+        }
+    }
+
+    Write-Output ''
+    $over = Test-RamAltmanOverThreshold -Memory $Memory -Threshold $Config.Threshold
+    $position = if ($over) { 'above' } else { 'not above' }
+    Write-Output "Verdict:    available RAM is $position the $($Config.Threshold)% threshold."
+
+    $lastSentPath = Join-Path $Config.StateDir 'last_sent'
+    $today = (Get-Date).ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    $lastSent = if (Test-Path -LiteralPath $lastSentPath) { ([IO.File]::ReadAllText($lastSentPath)).Trim() } else { '' }
+    if ($lastSent -eq $today) {
+        Write-Output 'Daily email: already sent today.'
+    }
+    else {
+        Write-Output 'Daily email: still due.'
+    }
+}
+
 function Test-RamAltmanOverThreshold {
     param($Memory, [int]$Threshold)
     return (($Memory.AvailableKb * 100) -gt ([int64]$Threshold * $Memory.TotalKb))
@@ -302,36 +409,36 @@ function New-RamAltmanEmail {
     $pct = Format-Percent $Memory.Percent
 
     $subjects = @(
-        'Good news: we found some RAM',
-        'Unused RAM detected in the wild',
-        'RAM sighting on my PC',
-        '{1} of RAM, just sitting there',
-        'You missed a spot',
-        'Daily RAM census: some survived',
-        '{2}% of my RAM remains at large',
-        "Still not all of it, I'm afraid"
+        'Task Manager has some explaining to do',
+        'Your standby list is showing',
+        'Windows reports {1} of unallocated enthusiasm',
+        '{1} of RAM is not doing anything productive',
+        'A wild standby page appears',
+        'The page file called; it is fine',
+        '{2}% of this PC is technically unemployed',
+        'Nothing is wrong, which is the problem'
     )
 
     $bodies = @(
-        "I'm writing to report that you appear to have missed some. This PC has {0} of RAM and {1} of it ({2}%) is currently available. I assume this is an oversight.",
-        "A routine inspection of my PC found {1} of unclaimed RAM out of {0}. That's {2}% of the machine doing absolutely nothing. I thought you'd want to know before someone tries to train something on it.",
-        "Daily status report:`r`n`r`n  Total RAM:     {0}`r`n  Available:     {1} ({2}%)`r`n  Threat level:  someone at OpenAI might notice",
-        "Even with every browser tab I own open, {1} of my {0} of RAM is still available. I'm as surprised as you are.",
-        "Please don't be alarmed, but there is {1} of RAM on my desk that isn't in a data centre. That's {2}% of what's installed here, and as far as I can tell it has no plans today.",
-        'Before you ask: yes, I counted the page cache as available. The kernel gives it back the moment anyone asks, which leaves {1} of {0} up for grabs.',
-        "Today's forecast for my PC: clear skies, light workloads and {2}% available memory. Expect {1} of the installed {0} to stay idle through the evening.",
-        "I hear RAM is hard to come by these days, so it feels a bit rude to be sitting on {1} of it. Total installed: {0}. It's not for sale, I just like knowing it's there.",
-        "I have a confession. I have {1} of RAM that I'm not using, which is {2}% of the {0} in this PC. I've told nobody but you and a cron job.",
-        'If {1} of RAM sits idle in a PC and nobody allocates it, does it still count as capacity? Asking on behalf of the {2}% of my memory with nothing to do.'
+        "I opened Task Manager, Resource Monitor and the Windows Memory Diagnostic, and all three agree: {1} of the {0} in this PC is available ({2}%). I am telling you because you seem to keep track of this sort of thing.",
+        "This PC has {0} of RAM and is currently doing nothing with {1} of it. The remaining {2}% is on the standby list, which is Windows for 'left on the counter'.",
+        "Daily Windows status report:`r`n`r`n  Installed:      {0}`r`n  Available:      {1} ({2}%)`r`n  Standby list:   doing its best`r`n  Reboot pending: probably",
+        "I opened Edge, WSL, Docker Desktop and the Settings app at the same time, and Windows still found {1} of {0} to sit on. I think it is showing off.",
+        "There is {1} of RAM in this machine that Windows has classified as available. That is {2}% of the total, which feels like a lot for something whose main job is running a browser and a sync client.",
+        "Before you ask: yes, I counted the standby list as available. Windows will hand it to the next program that asks, which is more than I can say for the OneDrive folder.",
+        "Today's forecast: a high chance of idle memory, {2}% availability, and {1} of {0} staying out of the data centre. Expect scattered Windows Updates.",
+        "RAM is scarce, so I feel obliged to report that {1} of my {0} is sitting here, cached, warm and not training anything. It is available, allegedly.",
+        "Confession: I have {1} of RAM in this PC with no plans. That is {2}% of the machine. I have told Windows, Task Manager and now you.",
+        "If {1} of available RAM is just standby pages waiting for a program, does it count as capacity? Asking on behalf of the {2}% of my memory that is currently on the bench."
     )
 
     $signoffs = @(
-        'Yours in abundance,',
-        'Regards from the last free RAM in the county,',
-        'Hoarding responsibly,',
-        'Stay allocated,',
-        'Yours, with memory to spare,',
-        'Kind regards,'
+        'From the standby list,',
+        'Yours in available memory,',
+        'Not paged out,',
+        'Resident and unrepentant,',
+        'Awaiting a memory pressure event,',
+        'With regards from the free list,'
     )
 
     $stateDir = $Config.StateDir
@@ -348,7 +455,7 @@ function New-RamAltmanEmail {
     $signoff = $signoffs[$signoffIndex]
     $fromName = if ($Config.FromName) { $Config.FromName } else { 'A concerned RAM owner' }
 
-    $body = "Hi Sam,`r`n`r`n$bodyText`r`n`r`n$signoff`r`n$fromName`r`n`r`n--`r`nSent automatically, at most once a day, by a small script on one PC.`r`nReply if you'd like it to stop."
+    $body = "Hi Sam,`r`n`r`n$bodyText`r`n`r`n$signoff`r`n$fromName`r`n`r`n--`r`nSent automatically, at most once a day, by a Windows program with time on its hands.`r`nReply if you'd like it to stop."
 
     [pscustomobject]@{
         Subject = $subject
@@ -504,14 +611,16 @@ function Uninstall-RamAltmanTask {
 
 function Show-RamAltmanHelp {
     Write-Output @"
-$($script:AppName) $($script:Version) - Windows/PowerShell edition
+$($script:AppName) $($script:Version) - Windows Division (PowerShell edition)
 
 Tracks RAM usage and, at most once a day, tells Sam Altman when this PC has
-RAM to spare.
+RAM to spare. The report command is Windows-only and shows what Windows is
+doing with the memory it has not lent out.
 
 Usage:
   ram-altman.ps1                 Log a sample and send the daily email if due
   ram-altman.ps1 --status        Print current memory figures and exit
+  ram-altman.ps1 --report        Status, commit charge, uptime and top processes
   ram-altman.ps1 --dry-run       Print the email that would be sent and exit
   ram-altman.ps1 --install-task  Sample every 5 minutes in Task Scheduler
   ram-altman.ps1 --uninstall-task Remove that scheduled task
@@ -552,6 +661,13 @@ function Invoke-RamAltman {
             $config = Get-RamAltmanConfig
             $memory = Read-RamAltmanMemory
             Show-RamAltmanStatus -Memory $memory
+            return
+        }
+        '--report' {
+            $config = Get-RamAltmanConfig
+            $memory = Read-RamAltmanMemory
+            $extra = Get-RamAltmanReportData
+            Show-RamAltmanReport -Config $config -Memory $memory -Extra $extra
             return
         }
         '--dry-run' {

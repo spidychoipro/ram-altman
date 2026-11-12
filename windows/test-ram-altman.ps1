@@ -154,11 +154,26 @@ try {
         Check-True "$kind status does not write state" (-not (Test-Path -LiteralPath $state)) 'state dir was created'
     }
 
+    # ----- report -------------------------------------------------------------
+    foreach ($kind in @('ps', 'bat', 'exe')) {
+        if ($kind -eq 'exe' -and -not $ExePath) { continue }
+        Reset-State
+        $report = Invoke-Tool -Kind $kind -Arguments @('--report') -Environment (BaseEnvironment)
+        Check "$kind report exits 0" $report.ExitCode 0
+        Check-True "$kind report has a title" ($report.Output -match 'Ram Altman - Windows Division') $report.Output
+        Check-True "$kind report has a machine" ($report.Output -match 'Machine:\s+\S') $report.Output
+        Check-True "$kind report has commit" ($report.Output -match 'Commit:\s+') $report.Output
+        Check-True "$kind report has uptime" ($report.Output -match 'Uptime:\s+') $report.Output
+        Check-True "$kind report has processes" ($report.Output -match 'Top processes by working set:') $report.Output
+        Check-True "$kind report has a verdict" ($report.Output -match 'Verdict:\s+') $report.Output
+        Check-True "$kind report writes no state" (-not (Test-Path -LiteralPath $state)) 'state dir was created'
+    }
+
     # ----- version / help -----------------------------------------------------
     foreach ($kind in @('ps', 'bat', 'exe')) {
         if ($kind -eq 'exe' -and -not $ExePath) { continue }
         $version = Invoke-Tool -Kind $kind -Arguments @('--version')
-        Check "$kind version" ($version.Output.Trim()) 'ram-altman 1.1.0'
+        Check "$kind version" ($version.Output.Trim()) 'ram-altman 1.2.0'
         $help = Invoke-Tool -Kind $kind -Arguments @('--help')
         Check "$kind help exits 0" $help.ExitCode 0
         Check-True "$kind help mentions --dry-run" ($help.Output -match '--dry-run') $help.Output
@@ -180,6 +195,8 @@ try {
         Check "$kind dry run exits 0" $dry.ExitCode 0
         Check-True "$kind dry run prints a subject" ($dry.Output -match '(?m)^Subject: .+') $dry.Output
         Check-True "$kind dry run prints the greeting" ($dry.Output -match 'Hi Sam,') $dry.Output
+        Check-True "$kind dry run shows sender placeholder" ($dry.Output -match '(?m)^From: sender-not-set@example\.com$') $dry.Output
+        Check-True "$kind dry run shows recipient placeholder" ($dry.Output -match '(?m)^To: recipient-not-set@example\.com$') $dry.Output
         Check-True "$kind dry run writes no state" (-not (Test-Path -LiteralPath $dryState)) 'dry run created state'
         Check-True "$kind dry run sends nothing" (-not (Test-Path -LiteralPath $dryOutbox)) 'dry run wrote outbox'
     }
@@ -264,10 +281,17 @@ try {
         RAM_ALTMAN_FAKE_MEMORY = '16000000,9000000,100000'
         RAM_ALTMAN_OUTBOX      = $outbox
     }
-    $configRun = Invoke-Tool -Kind 'ps' -Environment $configEnv
-    Check 'config file supplies recipient' $configRun.ExitCode 0
-    Check-True 'config file supplies sender name' ((Get-Content -LiteralPath $outbox -Raw) -match 'Test PC') 'from name missing'
-    Check-True 'config file loads' (Test-Path -LiteralPath $outbox) $configRun.Output
+    foreach ($kind in @('ps', 'bat', 'exe')) {
+        if ($kind -eq 'exe' -and -not $ExePath) { continue }
+        Remove-Item -LiteralPath $outbox -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $state 'last_sent') -Force -ErrorAction SilentlyContinue
+        $configRun = Invoke-Tool -Kind $kind -Environment $configEnv
+        Check "$kind config file supplies recipient" $configRun.ExitCode 0
+        Check-True "$kind config file loads" (Test-Path -LiteralPath $outbox) $configRun.Output
+        $configText = Get-Content -LiteralPath $outbox -Raw
+        Check-True "$kind config file supplies sender" ($configText -match 'From: Test PC <pc@example.com>') $configText
+        Check-True "$kind config file supplies recipient header" ($configText -match 'To: sam@example.com') $configText
+    }
 
     # ----- rotation -----------------------------------------------------------
     Reset-State

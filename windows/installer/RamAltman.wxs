@@ -62,6 +62,12 @@
                 Target="[SystemFolder]cmd.exe"
                 Arguments="/k &quot;[INSTALLFOLDER]ram-altman.bat&quot; --status"
                 WorkingDirectory="INSTALLFOLDER" />
+      <Shortcut Id="ReportShortcut"
+                Name="Ram Altman Report"
+                Description="Commit charge, uptime and the processes holding your RAM"
+                Target="[SystemFolder]cmd.exe"
+                Arguments="/k &quot;[INSTALLFOLDER]ram-altman.exe&quot; --report"
+                WorkingDirectory="INSTALLFOLDER" />
       <Shortcut Id="UninstallShortcut"
                 Name="Uninstall Ram Altman"
                 Description="Remove Ram Altman"

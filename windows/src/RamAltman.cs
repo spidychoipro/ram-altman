@@ -61,10 +61,25 @@ namespace RamAltman
         public string Body;
     }
 
+    internal sealed class ProcessMemory
+    {
+        public string Name;
+        public long WorkingSetKb;
+    }
+
+    internal sealed class ReportData
+    {
+        public string Machine;
+        public long CommitUsedKb = -1;
+        public long CommitLimitKb = -1;
+        public TimeSpan? Uptime;
+        public List<ProcessMemory> Processes = new List<ProcessMemory>();
+    }
+
     internal static class Program
     {
         private const string AppName = "ram-altman";
-        private const string VersionNumber = "1.1.0";
+        private const string VersionNumber = "1.2.0";
         private const string TaskName = "Ram Altman";
         private const int MaxLogBytes = 10 * 1024 * 1024;
         private const int LogLinesToKeep = 50000;
@@ -74,38 +89,38 @@ namespace RamAltman
 
         private static readonly string[] Subjects =
         {
-            "Good news: we found some RAM",
-            "Unused RAM detected in the wild",
-            "RAM sighting on my PC",
-            "{1} of RAM, just sitting there",
-            "You missed a spot",
-            "Daily RAM census: some survived",
-            "{2}% of my RAM remains at large",
-            "Still not all of it, I'm afraid"
+            "Task Manager has some explaining to do",
+            "Your standby list is showing",
+            "Windows reports {1} of unallocated enthusiasm",
+            "{1} of RAM is not doing anything productive",
+            "A wild standby page appears",
+            "The page file called; it is fine",
+            "{2}% of this PC is technically unemployed",
+            "Nothing is wrong, which is the problem"
         };
 
         private static readonly string[] Bodies =
         {
-            "I'm writing to report that you appear to have missed some. This PC has {0} of RAM and {1} of it ({2}%) is currently available. I assume this is an oversight.",
-            "A routine inspection of my PC found {1} of unclaimed RAM out of {0}. That's {2}% of the machine doing absolutely nothing. I thought you'd want to know before someone tries to train something on it.",
-            "Daily status report:\r\n\r\n  Total RAM:     {0}\r\n  Available:     {1} ({2}%)\r\n  Threat level:  someone at OpenAI might notice",
-            "Even with every browser tab I own open, {1} of my {0} of RAM is still available. I'm as surprised as you are.",
-            "Please don't be alarmed, but there is {1} of RAM on my desk that isn't in a data centre. That's {2}% of what's installed here, and as far as I can tell it has no plans today.",
-            "Before you ask: yes, I counted the page cache as available. The kernel gives it back the moment anyone asks, which leaves {1} of {0} up for grabs.",
-            "Today's forecast for my PC: clear skies, light workloads and {2}% available memory. Expect {1} of the installed {0} to stay idle through the evening.",
-            "I hear RAM is hard to come by these days, so it feels a bit rude to be sitting on {1} of it. Total installed: {0}. It's not for sale, I just like knowing it's there.",
-            "I have a confession. I have {1} of RAM that I'm not using, which is {2}% of the {0} in this PC. I've told nobody but you and a cron job.",
-            "If {1} of RAM sits idle in a PC and nobody allocates it, does it still count as capacity? Asking on behalf of the {2}% of my memory with nothing to do."
+            "I opened Task Manager, Resource Monitor and the Windows Memory Diagnostic, and all three agree: {1} of the {0} in this PC is available ({2}%). I am telling you because you seem to keep track of this sort of thing.",
+            "This PC has {0} of RAM and is currently doing nothing with {1} of it. The remaining {2}% is on the standby list, which is Windows for 'left on the counter'.",
+            "Daily Windows status report:\r\n\r\n  Installed:      {0}\r\n  Available:      {1} ({2}%)\r\n  Standby list:   doing its best\r\n  Reboot pending: probably",
+            "I opened Edge, WSL, Docker Desktop and the Settings app at the same time, and Windows still found {1} of {0} to sit on. I think it is showing off.",
+            "There is {1} of RAM in this machine that Windows has classified as available. That is {2}% of the total, which feels like a lot for something whose main job is running a browser and a sync client.",
+            "Before you ask: yes, I counted the standby list as available. Windows will hand it to the next program that asks, which is more than I can say for the OneDrive folder.",
+            "Today's forecast: a high chance of idle memory, {2}% availability, and {1} of {0} staying out of the data centre. Expect scattered Windows Updates.",
+            "RAM is scarce, so I feel obliged to report that {1} of my {0} is sitting here, cached, warm and not training anything. It is available, allegedly.",
+            "Confession: I have {1} of RAM in this PC with no plans. That is {2}% of the machine. I have told Windows, Task Manager and now you.",
+            "If {1} of available RAM is just standby pages waiting for a program, does it count as capacity? Asking on behalf of the {2}% of my memory that is currently on the bench."
         };
 
         private static readonly string[] Signoffs =
         {
-            "Yours in abundance,",
-            "Regards from the last free RAM in the county,",
-            "Hoarding responsibly,",
-            "Stay allocated,",
-            "Yours, with memory to spare,",
-            "Kind regards,"
+            "From the standby list,",
+            "Yours in available memory,",
+            "Not paged out,",
+            "Resident and unrepentant,",
+            "Awaiting a memory pressure event,",
+            "With regards from the free list,"
         };
 
         private static int Main(string[] args)
@@ -155,6 +170,12 @@ namespace RamAltman
             {
                 MemoryInfo statusMemory = ReadMemory();
                 ShowStatus(statusMemory);
+                return 0;
+            }
+
+            if (command == "--report")
+            {
+                ShowReport(config);
                 return 0;
             }
 
@@ -416,6 +437,147 @@ namespace RamAltman
             return memory.AvailableKb * 100L > (long)threshold * memory.TotalKb;
         }
 
+        // ----- report --------------------------------------------------------
+
+        private static string FormatMib(long kb)
+        {
+            double mib = Math.Round(kb / 1024.0, 1);
+            return mib.ToString("0.0", Invariant) + " MiB";
+        }
+
+        private static string FormatDuration(TimeSpan? span)
+        {
+            if (!span.HasValue || span.Value.TotalSeconds < 0) return "unknown";
+            TimeSpan value = span.Value;
+            if (value.Days > 0) return value.Days + "d " + value.Hours + "h " + value.Minutes + "m";
+            if (value.Hours > 0) return value.Hours + "h " + value.Minutes + "m";
+            return value.Minutes + "m";
+        }
+
+        private static ReportData ReadReportData()
+        {
+            ReportData data = new ReportData();
+            data.Machine = Environment.MachineName;
+
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "SELECT CSName, TotalVirtualMemorySize, FreeVirtualMemory, LastBootUpTime FROM Win32_OperatingSystem"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        object name = item["CSName"];
+                        if (name != null) data.Machine = Convert.ToString(name, Invariant);
+
+                        object total = item["TotalVirtualMemorySize"];
+                        object free = item["FreeVirtualMemory"];
+                        if (total != null && free != null)
+                        {
+                            data.CommitLimitKb = Convert.ToInt64(total, Invariant);
+                            data.CommitUsedKb = data.CommitLimitKb - Convert.ToInt64(free, Invariant);
+                        }
+
+                        object boot = item["LastBootUpTime"];
+                        if (boot != null)
+                        {
+                            DateTime bootTime = ManagementDateTimeConverter.ToDateTime(Convert.ToString(boot, Invariant));
+                            data.Uptime = DateTime.Now - bootTime;
+                        }
+                    }
+                }
+            }
+            catch (ManagementException)
+            {
+                // Commit and uptime are optional; the report still has the part that matters.
+            }
+            catch (InvalidCastException)
+            {
+            }
+
+            try
+            {
+                List<ProcessMemory> candidates = new List<ProcessMemory>();
+                foreach (Process process in Process.GetProcesses())
+                {
+                    try
+                    {
+                        ProcessMemory entry = new ProcessMemory();
+                        entry.Name = process.ProcessName;
+                        entry.WorkingSetKb = process.WorkingSet64 / 1024L;
+                        candidates.Add(entry);
+                    }
+                    catch (Exception)
+                    {
+                        // Some system processes do not let go of their working set.
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                }
+
+                candidates.Sort(delegate(ProcessMemory left, ProcessMemory right)
+                {
+                    return right.WorkingSetKb.CompareTo(left.WorkingSetKb);
+                });
+
+                for (int i = 0; i < candidates.Count && i < 5; i++)
+                {
+                    data.Processes.Add(candidates[i]);
+                }
+            }
+            catch (Exception)
+            {
+                // An empty process table is a valid answer.
+            }
+
+            return data;
+        }
+
+        private static void ShowReport(Config config)
+        {
+            MemoryInfo memory = ReadMemory();
+            ReportData extra = ReadReportData();
+
+            Console.WriteLine("Ram Altman - Windows Division");
+            Console.WriteLine("Machine:    " + extra.Machine);
+            ShowStatus(memory);
+
+            if (extra.CommitLimitKb > 0)
+            {
+                Console.WriteLine("Commit:     " + FormatGib(extra.CommitUsedKb) + " / " + FormatGib(extra.CommitLimitKb));
+            }
+            else
+            {
+                Console.WriteLine("Commit:     unavailable");
+            }
+            Console.WriteLine("Uptime:     " + FormatDuration(extra.Uptime));
+            Console.WriteLine();
+            Console.WriteLine("Top processes by working set:");
+
+            if (extra.Processes.Count == 0)
+            {
+                Console.WriteLine("  (none found)");
+            }
+            else
+            {
+                foreach (ProcessMemory process in extra.Processes)
+                {
+                    Console.WriteLine("  " + process.Name.PadRight(24) + FormatMib(process.WorkingSetKb).PadLeft(10));
+                }
+            }
+
+            Console.WriteLine();
+            bool over = IsOverThreshold(memory, config.Threshold);
+            Console.WriteLine("Verdict:    available RAM is " + (over ? "above" : "not above") +
+                " the " + config.Threshold + "% threshold.");
+
+            string today = DateTime.Now.ToString("yyyy-MM-dd", Invariant);
+            string lastSentPath = Path.Combine(config.StateDir, "last_sent");
+            string lastSent = File.Exists(lastSentPath) ? File.ReadAllText(lastSentPath).Trim() : "";
+            Console.WriteLine(lastSent == today ? "Daily email: already sent today." : "Daily email: still due.");
+        }
+
         // ----- email ---------------------------------------------------------
 
         private static Email ComposeEmail(Config config, MemoryInfo memory, bool dryRun)
@@ -437,7 +599,7 @@ namespace RamAltman
             email.Subject = subject;
             email.Body =
                 "Hi Sam,\r\n\r\n" + bodyText + "\r\n\r\n" + signoff + "\r\n" + fromName + "\r\n\r\n" +
-                "--\r\nSent automatically, at most once a day, by a small script on one PC.\r\n" +
+                "--\r\nSent automatically, at most once a day, by a Windows program with time on its hands.\r\n" +
                 "Reply if you'd like it to stop.";
             return email;
         }
@@ -679,14 +841,16 @@ namespace RamAltman
 
         private static void ShowHelp()
         {
-            Console.WriteLine(AppName + " " + VersionNumber + " - Windows console edition");
+            Console.WriteLine(AppName + " " + VersionNumber + " - Windows Division (console edition)");
             Console.WriteLine();
             Console.WriteLine("Tracks RAM usage and, at most once a day, tells Sam Altman when this PC");
-            Console.WriteLine("has RAM to spare.");
+            Console.WriteLine("has RAM to spare. The report command is Windows-only and shows what");
+            Console.WriteLine("Windows is doing with the memory it has not lent out.");
             Console.WriteLine();
             Console.WriteLine("Usage:");
             Console.WriteLine("  ram-altman.exe                 Log a sample and send the daily email if due");
             Console.WriteLine("  ram-altman.exe --status        Print current memory figures and exit");
+            Console.WriteLine("  ram-altman.exe --report        Status, commit charge, uptime and top processes");
             Console.WriteLine("  ram-altman.exe --dry-run       Print the email that would be sent and exit");
             Console.WriteLine("  ram-altman.exe --install-task  Sample every 5 minutes in Task Scheduler");
             Console.WriteLine("  ram-altman.exe --uninstall-task Remove that scheduled task");

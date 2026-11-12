@@ -123,15 +123,21 @@ There are three Windows editions, because one platform clearly wasn't enough:
   files a bit modern. It borrows the built-in PowerShell for the clock, memory
   probe and joke shuffle.
 
-Grab the per-user MSI or the portable zip from the
-[releases page](https://github.com/spidychoipro/ram-altman/releases). The MSI
-needs no administrator and adds a Start Menu shortcut; the zip just runs.
+They aren't a straight port. The email copy is about Task Manager, standby
+lists, Edge, WSL and OneDrive rather than `/proc/meminfo` and cron, and
+`--report` adds commit charge, uptime and the processes actually holding the
+memory:
 
 ```powershell
 ram-altman.exe --status     # see the evidence against you
+ram-altman.exe --report     # commit, uptime, top processes, verdict
 ram-altman.exe --dry-run    # preview an email without sending it
 ram-altman.exe --install-task
 ```
+
+Grab the per-user MSI or the portable zip from the
+[releases page](https://github.com/spidychoipro/ram-altman/releases). The MSI
+needs no administrator and adds Start Menu shortcuts; the zip just runs.
 
 Windows has no `/proc/meminfo`, so the memory accounting uses
 `GlobalMemoryStatusEx` and the system cache counter. `used` is still

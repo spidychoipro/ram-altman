@@ -1,11 +1,14 @@
-# Ram Altman for Windows
+# Ram Altman: Windows Division
 
-The same joke as the bash original, with Windows memory accounting and three
-ways to run it: a small console executable, a PowerShell script, and a batch
-file. All three read the same configuration, write the same CSV and send at
-most one email a day.
+The Windows editions are not a line-by-line port of the bash script. They use
+Windows memory accounting, their own email copy about standby lists, Task
+Manager and OneDrive, and a `--report` command the Linux version does not have.
+They still follow the same rules: at most one email a day, one CSV sample per
+run, and a rotation so the joke ages slowly.
 
-The original Linux edition (`ram-altman.sh`) is untouched.
+There are three ways to run it: a small console executable, a PowerShell
+script, and a batch file. All three share one configuration file, one CSV and
+one daily limit.
 
 ## Which edition?
 
@@ -22,6 +25,26 @@ system for available memory, and shuffling the joke rotation. If PowerShell is
 missing (it is not, on a normal Windows install), the batch edition will not
 run.
 
+## What is different from the bash edition?
+
+- **`--report`**: commit charge, uptime and the five processes with the largest
+  working set, plus a verdict and the state of today's email. The bash edition
+  has no equivalent.
+- **Windows memory accounting**: `GlobalMemoryStatusEx` and the standby/free
+  page counters in the exe and PowerShell editions, CIM in the batch edition.
+- **Windows copy**: the subjects, bodies and sign-offs are about Task Manager,
+  standby lists, Edge, WSL and OneDrive. They are not the Linux jokes with the
+  word "kernel" swapped out.
+- **Windows transports**: SMTP through .NET or `curl.exe`, an external
+  sendmail-compatible command, or a plain outbox file.
+- **Task Scheduler**: `--install-task` creates a five-minute job for the
+  current user.
+
+What stays the same is the important part: one email a day, the threshold, the
+8/10/6 rotation, the CSV columns, `--dry-run`, and the promise to stop if
+someone asks. The original `ram-altman.sh`, `test-ram-altman.sh` and their
+documentation are untouched.
+
 ## Install
 
 ### MSI (recommended)
@@ -29,7 +52,7 @@ run.
 Download `ram-altman-<version>.msi` and run it. It is a **per-user** installer:
 no administrator prompt, no UAC. It puts the tools in
 `%LOCALAPPDATA%\Programs\Ram Altman`, adds that folder to your user `PATH`, and
-creates a Start Menu shortcut that opens `--status`.
+creates Start Menu shortcuts for `--status` and `--report`.
 
 The installer does not start anything, schedule anything, or configure an
 address. That part is on you, and it is in the next section.
@@ -56,12 +79,37 @@ The exe is built from `windows\src\RamAltman.cs`; see [Building](#building).
 
 ```powershell
 ram-altman.exe --status     # see the evidence against you
+ram-altman.exe --report     # the same, plus commit, uptime and memory hogs
 ram-altman.exe --dry-run    # preview the email without sending it
 ```
 
-`--status` and `--dry-run` never write a sample, never create the state
-directory and never send anything. `--dry-run` does not need an email address
-or a mail server, which makes it the safest way to enjoy the jokes.
+`--status`, `--report` and `--dry-run` never write a sample, never create the
+state directory and never send anything. `--dry-run` does not need an email
+address or a mail server, which makes it the safest way to enjoy the jokes.
+
+`--report` is Windows-only. It adds commit charge, uptime, the five processes
+with the largest working set, a threshold verdict and whether today's email is
+still due:
+
+```text
+Ram Altman - Windows Division
+Machine:    DESKTOP-EXAMPLE
+Total:      15.3 GiB
+Used:       6.7 GiB
+Available:  8.6 GiB (56.2%)
+  Free:     0.1 GiB
+  Cache:    8.5 GiB
+Commit:     9.2 GiB / 24.3 GiB
+Uptime:     2d 4h 12m
+
+Top processes by working set:
+  chrome                2.1 GiB
+  Code                  1.4 GiB
+  ...
+
+Verdict:    available RAM is above the 10% threshold.
+Daily email: still due.
+```
 
 Example output, from a PC that has confessed:
 
@@ -233,8 +281,8 @@ Artifacts land in `dist\`:
 
 ```text
 dist\ram-altman.exe
-dist\ram-altman-1.1.0.msi
-dist\ram-altman-1.1.0-portable.zip
+dist\ram-altman-1.2.0.msi
+dist\ram-altman-1.2.0-portable.zip
 ```
 
 `build.ps1` compiles the exe with the .NET Framework compiler, runs the test

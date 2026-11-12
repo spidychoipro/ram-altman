@@ -26,7 +26,7 @@ jobs:
           if ('${{ github.ref_type }}' -eq 'tag') {
             $version = '${{ github.ref_name }}'.TrimStart('v')
           } else {
-            $version = '1.1.0'
+            $version = '1.2.0'
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 

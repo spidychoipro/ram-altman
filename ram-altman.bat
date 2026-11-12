@@ -9,6 +9,7 @@ rem
 rem  Usage:
 rem    ram-altman.bat                 Log a sample and send the daily email if due
 rem    ram-altman.bat --status        Print current memory figures and exit
+rem    ram-altman.bat --report        Status, commit charge, uptime and top processes
 rem    ram-altman.bat --dry-run       Print the email that would be sent and exit
 rem    ram-altman.bat --install-task  Sample every 5 minutes in Task Scheduler
 rem    ram-altman.bat --uninstall-task Remove that scheduled task
@@ -27,12 +28,13 @@ rem  sendmail-compatible command, or a plain file when outbox is set.
 rem ============================================================================
 
 set "APP=ram-altman"
-set "VERSION=1.1.0"
+set "VERSION=1.2.0"
 set "TASK_NAME=Ram Altman"
 
 rem ----- pick the command ------------------------------------------------------
 if "%~1"=="" goto :daily
 if /i "%~1"=="--status" goto :status
+if /i "%~1"=="--report" goto :report
 if /i "%~1"=="--dry-run" goto :dry_run
 if /i "%~1"=="--install-task" goto :install_task
 if /i "%~1"=="--uninstall-task" goto :uninstall_task
@@ -49,14 +51,16 @@ echo %APP% %VERSION%
 exit /b 0
 
 :help
-echo %APP% %VERSION% - Windows batch edition
+echo %APP% %VERSION% - Windows Division ^(batch edition^)
 echo.
 echo Tracks RAM usage and, at most once a day, tells Sam Altman when this PC
-echo has RAM to spare.
+echo has RAM to spare. The report command is Windows-only and shows what
+echo Windows is doing with the memory it has not lent out.
 echo.
 echo Usage:
 echo   ram-altman.bat                 Log a sample and send the daily email if due
 echo   ram-altman.bat --status        Print current memory figures and exit
+echo   ram-altman.bat --report        Status, commit charge, uptime and top processes
 echo   ram-altman.bat --dry-run       Print the email that would be sent and exit
 echo   ram-altman.bat --install-task  Sample every 5 minutes in Task Scheduler
 echo   ram-altman.bat --uninstall-task Remove that scheduled task
@@ -92,6 +96,60 @@ echo Used:       %GIB_USED% GiB
 echo Available:  %GIB_AVAIL% GiB ^(%PCT_TEXT%%%^)
 echo   Free:     %GIB_FREE% GiB
 echo   Cache:    %GIB_CACHE% GiB
+exit /b 0
+
+:report
+call :load_config
+if errorlevel 1 exit /b 1
+call :read_memory
+if errorlevel 1 goto :memory_failed
+call :compute
+call :get_clock
+if errorlevel 1 goto :powershell_failed
+
+set "MACHINE=%COMPUTERNAME%"
+set "COMMIT_TEXT=unavailable"
+set "UPTIME_TEXT=unknown"
+set "TOP_FILE=%TEMP%\ram-altman-top-%RANDOM%%RANDOM%.txt"
+
+for /f "usebackq tokens=1-4 delims=;" %%a in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$os=Get-CimInstance Win32_OperatingSystem;$u=$os.TotalVirtualMemorySize-$os.FreeVirtualMemory;$t=(Get-Date)-$os.LastBootUpTime;$up=if($t.Days -gt 0){'{0}d {1}h {2}m' -f $t.Days,$t.Hours,$t.Minutes}elseif($t.Hours -gt 0){'{0}h {1}m' -f $t.Hours,$t.Minutes}else{'{0}m' -f $t.Minutes};'{0};{1};{2};{3}' -f $os.CSName,$u,$os.TotalVirtualMemorySize,$up"`) do (
+    if not "%%a"=="" set "MACHINE=%%a"
+    call :gib %%b COMMIT_USED_GIB
+    call :gib %%c COMMIT_LIMIT_GIB
+    set "COMMIT_TEXT=!COMMIT_USED_GIB! / !COMMIT_LIMIT_GIB! GiB"
+    set "UPTIME_TEXT=%%d"
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 | ForEach-Object { '{0};{1}' -f $_.ProcessName,[string]::Format([Globalization.CultureInfo]::InvariantCulture,'{0:0.0} MiB',$_.WorkingSet64/1MB) }" > "%TOP_FILE%" 2>nul
+
+echo Ram Altman - Windows Division
+echo Machine:    %MACHINE%
+echo Total:      %GIB_TOTAL% GiB
+echo Used:       %GIB_USED% GiB
+echo Available:  %GIB_AVAIL% GiB ^(%PCT_TEXT%%%^)
+echo   Free:     %GIB_FREE% GiB
+echo   Cache:    %GIB_CACHE% GiB
+echo Commit:     %COMMIT_TEXT%
+echo Uptime:     %UPTIME_TEXT%
+echo.
+echo Top processes by working set:
+if exist "%TOP_FILE%" (
+    for /f "usebackq tokens=1,* delims=;" %%p in ("%TOP_FILE%") do echo   %%p %%q
+)
+del "%TOP_FILE%" >nul 2>nul
+echo.
+if %PCT100% gtr %THRESHOLD100% (
+    echo Verdict:    available RAM is above the %THRESHOLD%%% threshold.
+) else (
+    echo Verdict:    available RAM is not above the %THRESHOLD%%% threshold.
+)
+set "LAST_SENT="
+if exist "%STATE_DIR%\last_sent" set /p LAST_SENT=<"%STATE_DIR%\last_sent"
+if "%LAST_SENT%"=="%TODAY%" (
+    echo Daily email: already sent today.
+) else (
+    echo Daily email: still due.
+)
 exit /b 0
 
 :dry_run
@@ -152,7 +210,7 @@ if errorlevel 1 goto :memory_failed
 call :compute
 
 if not exist "%STATE_DIR%" mkdir "%STATE_DIR%" >nul 2>nul
-mkdir "%STATE_DIR%\lock" >nul 2>nul
+mkdir "%STATE_DIR%\lock.batch" >nul 2>nul
 if errorlevel 1 (
     rem Another copy is already running. Quietly stand down.
     exit /b 0
@@ -179,13 +237,13 @@ if errorlevel 1 goto :send_failed
 > "%STATE_DIR%\last_sent" echo %TODAY%
 
 :daily_done
-rmdir "%STATE_DIR%\lock" >nul 2>nul
+rmdir "%STATE_DIR%\lock.batch" >nul 2>nul
 rmdir /s /q "%TMP%" >nul 2>nul
 exit /b 0
 
 :send_failed
 >&2 echo %APP%: email failed to send; will try again on the next run
-rmdir "%STATE_DIR%\lock" >nul 2>nul
+rmdir "%STATE_DIR%\lock.batch" >nul 2>nul
 rmdir /s /q "%TMP%" >nul 2>nul
 exit /b 1
 
@@ -195,7 +253,7 @@ exit /b 1
 
 :powershell_failed
 >&2 echo %APP%: PowerShell is required for the clock in the batch edition
-rmdir "%STATE_DIR%\lock" >nul 2>nul
+rmdir "%STATE_DIR%\lock.batch" >nul 2>nul
 rmdir /s /q "%TMP%" >nul 2>nul
 exit /b 1
 
@@ -251,11 +309,16 @@ set "INI_OUTBOX="
 if exist "%CONFIG_FILE%" (
     for /f "usebackq tokens=1,* delims==" %%A in ("%CONFIG_FILE%") do (
         set "INI_KEY=%%A"
-        for /f "tokens=* delims= " %%K in ("!INI_KEY!") do set "INI_KEY=%%K"
         set "INI_VALUE=%%B"
-        for /f "tokens=* delims= " %%V in ("!INI_VALUE!") do set "INI_VALUE=%%V"
+        call :trim_var INI_KEY
+        call :trim_var INI_VALUE
         if defined INI_KEY if not "!INI_KEY:~0,1!"=="#" if not "!INI_KEY:~0,1!"==";" (
-            if "!INI_VALUE:~0,1!"=="""" set "INI_VALUE=!INI_VALUE:~1,-1!"
+            rem Strip one pair of surrounding quotes, but leave quotes in the
+            rem middle of a value (for example a sendmail command) alone.
+            set "INI_NOQUOTES=!INI_VALUE:"=!"
+            if not "!INI_VALUE!"=="!INI_NOQUOTES!" (
+                if "!INI_VALUE:~1,-1!"=="!INI_NOQUOTES!" set "INI_VALUE=!INI_NOQUOTES!"
+            )
             if /i "!INI_KEY!"=="to" set "INI_TO=!INI_VALUE!"
             if /i "!INI_KEY!"=="from" set "INI_FROM=!INI_VALUE!"
             if /i "!INI_KEY!"=="fromname" set "INI_FROMNAME=!INI_VALUE!"
@@ -320,8 +383,26 @@ if "%CFG_SMTPTLS%"=="0" set "SMTP_TLS=0"
 
 set "FROM_NAME=%CFG_FROMNAME%"
 if not defined FROM_NAME set "FROM_NAME=A concerned RAM owner"
-set "FROM_HEADER=%CFG_FROM%"
-if defined CFG_FROMNAME set "FROM_HEADER=%CFG_FROMNAME% ^<%CFG_FROM%^>"
+set "FROM_HEADER=sender-not-set@example.com"
+if defined CFG_FROM set "FROM_HEADER=%CFG_FROM%"
+if defined CFG_FROMNAME if defined CFG_FROM set "FROM_HEADER=%CFG_FROMNAME% ^<%CFG_FROM%^>"
+exit /b 0
+
+:trim_var
+rem Trim leading and trailing spaces from the variable named in %1.
+setlocal EnableDelayedExpansion
+set "TRIM_VALUE=!%~1!"
+:trim_var_leading
+if defined TRIM_VALUE if "!TRIM_VALUE:~0,1!"==" " (
+    set "TRIM_VALUE=!TRIM_VALUE:~1!"
+    goto :trim_var_leading
+)
+:trim_var_trailing
+if defined TRIM_VALUE if "!TRIM_VALUE:~-1!"==" " (
+    set "TRIM_VALUE=!TRIM_VALUE:~0,-1!"
+    goto :trim_var_trailing
+)
+endlocal & set "%~1=%TRIM_VALUE%"
 exit /b 0
 
 :config_failed
@@ -437,7 +518,7 @@ type "%BODY_TEXT%" >> "%BODY_FULL%"
 >>"%BODY_FULL%" echo %FROM_NAME%
 >>"%BODY_FULL%" echo(
 >>"%BODY_FULL%" echo --
->>"%BODY_FULL%" echo Sent automatically, at most once a day, by a small script on one PC.
+>>"%BODY_FULL%" echo Sent automatically, at most once a day, by a Windows program with time on its hands.
 >>"%BODY_FULL%" echo Reply if you'd like it to stop.
 exit /b 0
 
@@ -480,95 +561,96 @@ exit /b 0
 rem ----- subject lines --------------------------------------------------------
 
 :subject_0
-set "EMAIL_SUBJECT=Good news: we found some RAM"
+set "EMAIL_SUBJECT=Task Manager has some explaining to do"
 exit /b
 :subject_1
-set "EMAIL_SUBJECT=Unused RAM detected in the wild"
+set "EMAIL_SUBJECT=Your standby list is showing"
 exit /b
 :subject_2
-set "EMAIL_SUBJECT=RAM sighting on my PC"
+set "EMAIL_SUBJECT=Windows reports %GIB_AVAIL% GiB of unallocated enthusiasm"
 exit /b
 :subject_3
-set "EMAIL_SUBJECT=%GIB_AVAIL% GiB of RAM, just sitting there"
+set "EMAIL_SUBJECT=%GIB_AVAIL% GiB of RAM is not doing anything productive"
 exit /b
 :subject_4
-set "EMAIL_SUBJECT=You missed a spot"
+set "EMAIL_SUBJECT=A wild standby page appears"
 exit /b
 :subject_5
-set "EMAIL_SUBJECT=Daily RAM census: some survived"
+set "EMAIL_SUBJECT=The page file called; it is fine"
 exit /b
 :subject_6
-set "EMAIL_SUBJECT=%PCT_TEXT%% of my RAM remains at large"
+set "EMAIL_SUBJECT=%PCT_TEXT%%% of this PC is technically unemployed"
 exit /b
 :subject_7
-set "EMAIL_SUBJECT=Still not all of it, I'm afraid"
+set "EMAIL_SUBJECT=Nothing is wrong, which is the problem"
 exit /b
 
 rem ----- body text -------------------------------------------------------------
 
 :body_text_0
->>"%BODY_TEXT%" echo I'm writing to report that you appear to have missed some. This PC has %GIB_TOTAL% GiB of RAM and %GIB_AVAIL% GiB of it ^(%PCT_TEXT%%%^) is currently available. I assume this is an oversight.
+>>"%BODY_TEXT%" echo I opened Task Manager, Resource Monitor and the Windows Memory Diagnostic, and all three agree: %GIB_AVAIL% GiB of the %GIB_TOTAL% GiB in this PC is available ^(%PCT_TEXT%%%^). I am telling you because you seem to keep track of this sort of thing.
 exit /b
 
 :body_text_1
->>"%BODY_TEXT%" echo A routine inspection of my PC found %GIB_AVAIL% GiB of unclaimed RAM out of %GIB_TOTAL% GiB. That's %PCT_TEXT%%% of the machine doing absolutely nothing. I thought you'd want to know before someone tries to train something on it.
+>>"%BODY_TEXT%" echo This PC has %GIB_TOTAL% GiB of RAM and is currently doing nothing with %GIB_AVAIL% GiB of it. The remaining %PCT_TEXT%%% is on the standby list, which is Windows for 'left on the counter'.
 exit /b
 
 :body_text_2
->>"%BODY_TEXT%" echo Daily status report:
+>>"%BODY_TEXT%" echo Daily Windows status report:
 >>"%BODY_TEXT%" echo(
->>"%BODY_TEXT%" echo   Total RAM:     %GIB_TOTAL% GiB
->>"%BODY_TEXT%" echo   Available:     %GIB_AVAIL% GiB ^(%PCT_TEXT%%%^)
->>"%BODY_TEXT%" echo   Threat level:  someone at OpenAI might notice
+>>"%BODY_TEXT%" echo   Installed:      %GIB_TOTAL% GiB
+>>"%BODY_TEXT%" echo   Available:      %GIB_AVAIL% GiB ^(%PCT_TEXT%%%^)
+>>"%BODY_TEXT%" echo   Standby list:   doing its best
+>>"%BODY_TEXT%" echo   Reboot pending: probably
 exit /b
 
 :body_text_3
->>"%BODY_TEXT%" echo Even with every browser tab I own open, %GIB_AVAIL% GiB of my %GIB_TOTAL% GiB of RAM is still available. I'm as surprised as you are.
+>>"%BODY_TEXT%" echo I opened Edge, WSL, Docker Desktop and the Settings app at the same time, and Windows still found %GIB_AVAIL% GiB of %GIB_TOTAL% GiB to sit on. I think it is showing off.
 exit /b
 
 :body_text_4
->>"%BODY_TEXT%" echo Please don't be alarmed, but there is %GIB_AVAIL% GiB of RAM on my desk that isn't in a data centre. That's %PCT_TEXT%%% of what's installed here, and as far as I can tell it has no plans today.
+>>"%BODY_TEXT%" echo There is %GIB_AVAIL% GiB of RAM in this machine that Windows has classified as available. That is %PCT_TEXT%%% of the total, which feels like a lot for something whose main job is running a browser and a sync client.
 exit /b
 
 :body_text_5
->>"%BODY_TEXT%" echo Before you ask: yes, I counted the page cache as available. The kernel gives it back the moment anyone asks, which leaves %GIB_AVAIL% GiB of %GIB_TOTAL% GiB up for grabs.
+>>"%BODY_TEXT%" echo Before you ask: yes, I counted the standby list as available. Windows will hand it to the next program that asks, which is more than I can say for the OneDrive folder.
 exit /b
 
 :body_text_6
->>"%BODY_TEXT%" echo Today's forecast for my PC: clear skies, light workloads and %PCT_TEXT%%% available memory. Expect %GIB_AVAIL% GiB of the installed %GIB_TOTAL% GiB to stay idle through the evening.
+>>"%BODY_TEXT%" echo Today's forecast: a high chance of idle memory, %PCT_TEXT%%% availability, and %GIB_AVAIL% GiB of %GIB_TOTAL% GiB staying out of the data centre. Expect scattered Windows Updates.
 exit /b
 
 :body_text_7
->>"%BODY_TEXT%" echo I hear RAM is hard to come by these days, so it feels a bit rude to be sitting on %GIB_AVAIL% GiB of it. Total installed: %GIB_TOTAL% GiB. It's not for sale, I just like knowing it's there.
+>>"%BODY_TEXT%" echo RAM is scarce, so I feel obliged to report that %GIB_AVAIL% GiB of my %GIB_TOTAL% GiB is sitting here, cached, warm and not training anything. It is available, allegedly.
 exit /b
 
 :body_text_8
->>"%BODY_TEXT%" echo I have a confession. I have %GIB_AVAIL% GiB of RAM that I'm not using, which is %PCT_TEXT%%% of the %GIB_TOTAL% GiB in this PC. I've told nobody but you and a cron job.
+>>"%BODY_TEXT%" echo Confession: I have %GIB_AVAIL% GiB of RAM in this PC with no plans. That is %PCT_TEXT%%% of the machine. I have told Windows, Task Manager and now you.
 exit /b
 
 :body_text_9
->>"%BODY_TEXT%" echo If %GIB_AVAIL% GiB of RAM sits idle in a PC and nobody allocates it, does it still count as capacity? Asking on behalf of the %PCT_TEXT%%% of my memory with nothing to do.
+>>"%BODY_TEXT%" echo If %GIB_AVAIL% GiB of available RAM is just standby pages waiting for a program, does it count as capacity? Asking on behalf of the %PCT_TEXT%%% of my memory that is currently on the bench.
 exit /b
 
 rem ----- sign-offs ------------------------------------------------------------
 
 :signoff_0
-set "EMAIL_SIGNOFF=Yours in abundance,"
+set "EMAIL_SIGNOFF=From the standby list,"
 exit /b
 :signoff_1
-set "EMAIL_SIGNOFF=Regards from the last free RAM in the county,"
+set "EMAIL_SIGNOFF=Yours in available memory,"
 exit /b
 :signoff_2
-set "EMAIL_SIGNOFF=Hoarding responsibly,"
+set "EMAIL_SIGNOFF=Not paged out,"
 exit /b
 :signoff_3
-set "EMAIL_SIGNOFF=Stay allocated,"
+set "EMAIL_SIGNOFF=Resident and unrepentant,"
 exit /b
 :signoff_4
-set "EMAIL_SIGNOFF=Yours, with memory to spare,"
+set "EMAIL_SIGNOFF=Awaiting a memory pressure event,"
 exit /b
 :signoff_5
-set "EMAIL_SIGNOFF=Kind regards,"
+set "EMAIL_SIGNOFF=With regards from the free list,"
 exit /b
 
 rem ============================================================================
