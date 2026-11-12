@@ -266,4 +266,4 @@ $env:RAM_ALTMAN_FAKE_MEMORY = '16000000,9000000,100000'
 
 ## License
 
-Free as in unallocated. See [LICENSE](../LICENSE).
+Free as in unallocated. See `LICENSE`.
