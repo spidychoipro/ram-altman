@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Per-user installer for the Windows editions. Installs into
+  %LOCALAPPDATA%\Programs\Ram Altman, adds that folder to the user PATH and
+  drops a Start Menu shortcut, without needing an administrator.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Ram Altman"
+           Manufacturer="Ram Altman contributors"
+           Version="$(var.Version)"
+           UpgradeCode="4b0a2f2e-9c6d-4a5e-8f3a-2d7c1b9e6a41"
+           Scope="perUser"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Ram Altman is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Ram Altman" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="Ram Altman" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Ram Altman" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentRef Id="PathComponent" />
+      <ComponentRef Id="StartMenuComponent" />
+    </Feature>
+
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="*">
+        <File Id="RamAltmanExe" Source="$(var.SourceDir)\ram-altman.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="ScriptsAndDocs" Guid="646ea6ae-2566-4260-a858-f86b6a9ff61c">
+        <File Source="$(var.RepoRoot)\ram-altman.ps1" />
+        <File Source="$(var.RepoRoot)\ram-altman.bat" />
+        <File Source="$(var.RepoRoot)\LICENSE" />
+        <File Source="$(var.RepoRoot)\windows\README.md" />
+        <File Source="$(var.RepoRoot)\windows\config.example.ini" />
+      </Component>
+    </ComponentGroup>
+
+    <Component Id="PathComponent" Directory="INSTALLFOLDER" Guid="9612667f-8132-457e-9707-25c3a9231aec">
+      <Environment Id="PathEnv"
+                   Name="PATH"
+                   Value="[INSTALLFOLDER]"
+                   Part="last"
+                   Action="set"
+                   System="no"
+                   Permanent="no" />
+      <RegistryValue Root="HKCU" Key="Software\RamAltman" Name="path" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="StartMenuComponent" Directory="ApplicationProgramsFolder" Guid="*">
+      <Shortcut Id="StatusShortcut"
+                Name="Ram Altman Status"
+                Description="See how much RAM is going to waste"
+                Target="[SystemFolder]cmd.exe"
+                Arguments="/k &quot;[INSTALLFOLDER]ram-altman.bat&quot; --status"
+                WorkingDirectory="INSTALLFOLDER" />
+      <Shortcut Id="UninstallShortcut"
+                Name="Uninstall Ram Altman"
+                Description="Remove Ram Altman"
+                Target="[SystemFolder]msiexec.exe"
+                Arguments="/x [ProductCode]" />
+      <RemoveFolder Id="RemoveProgramsFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\RamAltman" Name="startmenu" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+  </Package>
+</Wix>
