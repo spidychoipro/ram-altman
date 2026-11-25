@@ -112,6 +112,44 @@ It samples every five minutes and emails at most once a day. If a send fails, it
 | `RAM_ALTMAN_THRESHOLD` | Email when available RAM is above this percentage (whole number) | `10` |
 | `RAM_ALTMAN_STATE_DIR` | Where the log and state files live | `~/.local/state/ram-altman` |
 
+## Windows
+
+There are three Windows editions, because one platform clearly wasn't enough:
+
+- **`ram-altman.exe`** — a small console app that runs on the .NET Framework
+  that ships with Windows 10/11. No runtime to install.
+- **`ram-altman.ps1`** — the PowerShell edition, for reading and editing.
+- **`ram-altman.bat`** — the batch edition, for people who consider `.ps1`
+  files a bit modern. It borrows the built-in PowerShell for the clock, memory
+  probe and joke shuffle.
+
+They aren't a straight port. The email copy is about Task Manager, standby
+lists, Edge, WSL and OneDrive rather than `/proc/meminfo` and cron, and
+`--report` adds commit charge, uptime and the processes actually holding the
+memory:
+
+```powershell
+ram-altman.exe --status     # see the evidence against you
+ram-altman.exe --report     # commit, uptime, top processes, verdict
+ram-altman.exe --dry-run    # preview an email without sending it
+ram-altman.exe --install-task
+```
+
+Grab the per-user MSI or the portable zip from the
+[releases page](https://github.com/spidychoipro/ram-altman/releases). The MSI
+needs no administrator and adds Start Menu shortcuts; the zip just runs.
+
+Windows has no `/proc/meminfo`, so the memory accounting uses
+`GlobalMemoryStatusEx` and the system cache counter. `used` is still
+`total - available`, and available still includes the cache Windows can hand
+back. Configuration lives in `%LOCALAPPDATA%\ram-altman\config.ini`, with
+`RAM_ALTMAN_*` environment variables winning over the file. SMTP, an external
+`sendmail`-compatible command and a test outbox are all supported.
+
+Everything Windows-specific — install, configuration, scheduling, security
+notes and build instructions — is in
+[`windows/README.md`](windows/README.md).
+
 ## Audit yourself
 
 Let it run for a while, then find out how your machine compares:

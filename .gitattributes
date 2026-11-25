@@ -1,0 +1,8 @@
+# Keep the Windows scripts usable when the repo is cloned on any platform.
+# cmd.exe only finds labels in the first 4 KiB of an LF-only batch file, so the
+# batch editions need real CRLF line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.wxs text eol=crlf
+*.ini text eol=crlf
